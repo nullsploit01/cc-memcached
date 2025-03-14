@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bufio"
 	"net"
 	"sync"
 
@@ -45,4 +46,19 @@ func (s *Server) StartServer() error {
 func (s *Server) handleConnection(c net.Conn) {
 	defer c.Close()
 	s.cmd.OutOrStdout().Write([]byte("Accepted connection from " + c.RemoteAddr().String() + "\n"))
+
+	reader := bufio.NewReader(c)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			s.cmd.ErrOrStderr().Write([]byte("could not read line, err: " + err.Error()))
+			break
+		}
+
+		_, err = c.Write([]byte(line))
+		if err != nil {
+			s.cmd.ErrOrStderr().Write([]byte("could not write line, err: " + err.Error()))
+			break
+		}
+	}
 }
