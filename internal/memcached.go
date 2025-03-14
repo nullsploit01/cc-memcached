@@ -30,6 +30,8 @@ func (s *Server) StartServer() error {
 
 	defer l.Close()
 
+	s.cmd.OutOrStdout().Write([]byte("Listening on " + l.Addr().String() + "\n"))
+
 	for {
 		c, err := l.Accept()
 		if err != nil {
