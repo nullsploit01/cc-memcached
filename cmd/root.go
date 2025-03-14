@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/nullsploit01/cc-memcached/internal"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +19,13 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	Run: func(cmd *cobra.Command, args []string) {
+		s := internal.InitServer("11211", cmd)
+		err := s.StartServer()
+		if err != nil {
+			cmd.ErrOrStderr().Write([]byte(err.Error()))
+		}
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

@@ -41,5 +41,6 @@ func (s *Server) StartServer() error {
 }
 
 func (s *Server) handleConnection(c net.Conn) {
-	// TODO: implement
+	defer c.Close()
+	s.cmd.OutOrStdout().Write([]byte("Accepted connection from " + c.RemoteAddr().String() + "\n"))
 }
