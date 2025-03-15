@@ -2,7 +2,10 @@ package internal
 
 import (
 	"bufio"
+	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -51,14 +54,53 @@ func (s *Server) handleConnection(c net.Conn) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			s.cmd.ErrOrStderr().Write([]byte("could not read line, err: " + err.Error()))
+			if err != io.EOF {
+				s.cmd.ErrOrStderr().Write([]byte("could not read line, err: " + err.Error()))
+			}
 			break
 		}
 
-		_, err = c.Write([]byte(line))
-		if err != nil {
-			s.cmd.ErrOrStderr().Write([]byte("could not write line, err: " + err.Error()))
-			break
+		response := s.processMessage(line, reader)
+		if response != "" {
+			_, err = c.Write([]byte(response))
+			if err != nil {
+				s.cmd.ErrOrStderr().Write([]byte("could not write response, err: " + err.Error()))
+				break
+			}
+			continue
 		}
 	}
+}
+
+func (s *Server) processMessage(line string, reader *bufio.Reader) string {
+	parts := strings.Fields(line)
+
+	command, key := parts[0], parts[1]
+
+	switch command {
+	case "set":
+		if len(parts) < 5 {
+			return "CLIENT_ERROR invalid arguments\r\n"
+		}
+
+		byteCount, err := strconv.Atoi(parts[4])
+		if err != nil {
+			return "CLIENT_ERROR invalid byte count\r\n"
+		}
+
+		data := make([]byte, byteCount)
+		n, err := reader.Read(data)
+
+		if n != byteCount || err != nil {
+			return "CLIENT_ERROR could not read data\r\n"
+		}
+
+		s.mu.Lock()
+		s.store[key] = string(data)
+		s.mu.Unlock()
+
+		return "STORED\r\n"
+	}
+
+	return ""
 }
