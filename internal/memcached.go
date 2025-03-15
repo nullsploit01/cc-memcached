@@ -106,16 +106,13 @@ func (s *Server) handleConnection(c net.Conn) {
 			s.mu.Lock()
 			switch cmd {
 			case "set":
-				s.mu.Lock()
 				s.store[pending.key] = entry{
 					value:      string(data),
 					expiration: expiration,
 				}
 				c.Write([]byte("STORED\r\n"))
-				s.mu.Unlock()
 
 			case "add":
-				s.mu.Lock()
 				if _, e := s.store[pending.key]; e {
 					c.Write([]byte("NOT_STORED\r\n"))
 				} else {
@@ -125,10 +122,8 @@ func (s *Server) handleConnection(c net.Conn) {
 					}
 					c.Write([]byte("STORED\r\n"))
 				}
-				s.mu.Unlock()
 
 			case "replace":
-				s.mu.Lock()
 				if _, e := s.store[pending.key]; e {
 					s.store[pending.key] = entry{
 						value:      string(data),
@@ -138,7 +133,6 @@ func (s *Server) handleConnection(c net.Conn) {
 				} else {
 					c.Write([]byte("NOT_STORED\r\n"))
 				}
-				s.mu.Unlock()
 
 			case "append":
 				if existingEntry, e := s.store[pending.key]; e {
