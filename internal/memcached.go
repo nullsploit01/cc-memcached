@@ -17,9 +17,8 @@ type Server struct {
 	cmd         *cobra.Command
 	port        string
 	store       sync.Map
-	mu          sync.RWMutex
-	pendingData map[net.Conn]*pendingSet
-	pendingCmd  map[net.Conn]string
+	pendingData sync.Map
+	pendingCmd  sync.Map
 }
 
 type entry struct {
@@ -37,10 +36,9 @@ func InitServer(port string, cmd *cobra.Command) *Server {
 	return &Server{
 		cmd:         cmd,
 		port:        port,
-		mu:          sync.RWMutex{},
 		store:       sync.Map{},
-		pendingData: make(map[net.Conn]*pendingSet),
-		pendingCmd:  make(map[net.Conn]string),
+		pendingData: sync.Map{},
+		pendingCmd:  sync.Map{},
 	}
 }
 
@@ -70,40 +68,32 @@ func (s *Server) handleConnection(c net.Conn) {
 
 	reader := bufio.NewReader(c)
 	for {
-		s.mu.RLock()
-		pending, exists := s.pendingData[c]
-		s.mu.RUnlock()
-		if exists {
+		if val, exists := s.pendingData.Load(c); exists {
+			pending := val.(*pendingSet)
 			data := make([]byte, pending.byteCount)
 			_, err := io.ReadFull(reader, data)
 			if err != nil {
 				c.Write([]byte("CLIENT_ERROR invalid byte count\r\n"))
-				s.mu.Lock()
-				delete(s.pendingData, c)
-				delete(s.pendingCmd, c)
-				s.mu.Unlock()
+				s.pendingCmd.Delete(c)
+				s.pendingData.Delete(c)
 				continue
 			}
 
 			ending, err := reader.ReadString('\n')
 			if err != nil || !strings.HasSuffix(ending, "\r\n") {
 				c.Write([]byte("CLIENT_ERROR bad data block termination\r\n"))
-				s.mu.Lock()
-				delete(s.pendingData, c)
-				delete(s.pendingCmd, c)
-				s.mu.Unlock()
+				s.pendingCmd.Delete(c)
+				s.pendingData.Delete(c)
 				continue
 			}
 
-			s.mu.RLock()
-			cmd := s.pendingCmd[c]
-			s.mu.RUnlock()
+			cmdVal, _ := s.pendingCmd.Load(c)
+			cmd := cmdVal.(string)
 			expiration := pending.expTime
 
 			if expiration > 0 && expiration < 2592000 { // 30 days
 				expiration += time.Now().Unix()
 			}
-			s.mu.Lock()
 			switch cmd {
 			case "set":
 				s.store.Store(pending.key, entry{
@@ -163,9 +153,8 @@ func (s *Server) handleConnection(c net.Conn) {
 				}
 			}
 
-			delete(s.pendingData, c)
-			delete(s.pendingCmd, c)
-			s.mu.Unlock()
+			s.pendingCmd.Delete(c)
+			s.pendingData.Delete(c)
 			continue
 		}
 
@@ -180,14 +169,12 @@ func (s *Server) handleConnection(c net.Conn) {
 		response, expectingData, key, byteCount, expTime, pendingCmd := s.processMessage(strings.TrimSpace(line))
 
 		if expectingData {
-			s.mu.Lock()
-			s.pendingData[c] = &pendingSet{
+			s.pendingData.Store(c, &pendingSet{
 				key:       key,
 				byteCount: byteCount,
 				expTime:   expTime,
-			}
-			s.pendingCmd[c] = pendingCmd
-			s.mu.Unlock()
+			})
+			s.pendingCmd.Store(c, pendingCmd)
 			continue
 		}
 
