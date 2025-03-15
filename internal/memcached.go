@@ -12,17 +12,24 @@ import (
 )
 
 type Server struct {
-	cmd   *cobra.Command
-	port  string
-	store map[string]string
-	mu    sync.RWMutex
+	cmd         *cobra.Command
+	port        string
+	store       map[string]string
+	mu          sync.RWMutex
+	pendingData map[net.Conn]*pendingSet
+}
+
+type pendingSet struct {
+	key       string
+	byteCount int
 }
 
 func InitServer(port string, cmd *cobra.Command) *Server {
 	return &Server{
-		cmd:   cmd,
-		port:  port,
-		store: make(map[string]string),
+		cmd:         cmd,
+		port:        port,
+		store:       make(map[string]string),
+		pendingData: make(map[net.Conn]*pendingSet),
 	}
 }
 
@@ -52,6 +59,31 @@ func (s *Server) handleConnection(c net.Conn) {
 
 	reader := bufio.NewReader(c)
 	for {
+		if pending, exists := s.pendingData[c]; exists {
+			data := make([]byte, pending.byteCount)
+			_, err := io.ReadFull(reader, data)
+			if err != nil {
+				c.Write([]byte("CLIENT_ERROR invalid byte count\r\n"))
+				delete(s.pendingData, c)
+				continue
+			}
+
+			ending, err := reader.ReadString('\n')
+			if err != nil || !strings.HasSuffix(ending, "\r\n") {
+				c.Write([]byte("CLIENT_ERROR bad data block termination\r\n"))
+				delete(s.pendingData, c)
+				continue
+			}
+
+			s.mu.Lock()
+			s.store[pending.key] = string(data)
+			s.mu.Unlock()
+
+			c.Write([]byte("STORED\r\n"))
+			delete(s.pendingData, c)
+			continue
+		}
+
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err != io.EOF {
@@ -60,7 +92,17 @@ func (s *Server) handleConnection(c net.Conn) {
 			break
 		}
 
-		response := s.processMessage(line, reader)
+		response, expectingData, key, byteCount := s.processMessage(strings.TrimSpace(line))
+
+		if expectingData {
+			s.pendingData[c] = &pendingSet{
+				key:       key,
+				byteCount: byteCount,
+			}
+
+			continue
+		}
+
 		if response != "" {
 			_, err = c.Write([]byte(response))
 			if err != nil {
@@ -72,35 +114,28 @@ func (s *Server) handleConnection(c net.Conn) {
 	}
 }
 
-func (s *Server) processMessage(line string, reader *bufio.Reader) string {
+func (s *Server) processMessage(line string) (response string, expectingData bool, key string, byteCount int) {
 	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return "ERROR\r\n", false, "", 0
+	}
 
 	command, key := parts[0], parts[1]
 
 	switch command {
 	case "set":
 		if len(parts) < 5 {
-			return "CLIENT_ERROR invalid arguments\r\n"
+			return "CLIENT_ERROR invalid arguments\r\n", false, "", 0
 		}
 
 		byteCount, err := strconv.Atoi(parts[4])
 		if err != nil {
-			return "CLIENT_ERROR invalid byte count\r\n"
+			return "CLIENT_ERROR invalid byte count\r\n", false, "", 0
 		}
 
-		data := make([]byte, byteCount)
-		n, err := reader.Read(data)
+		return "", true, key, byteCount
 
-		if n != byteCount || err != nil {
-			return "CLIENT_ERROR could not read data\r\n"
-		}
-
-		s.mu.Lock()
-		s.store[key] = string(data)
-		s.mu.Unlock()
-
-		return "STORED\r\n"
+	default:
+		return "ERROR\r\n", false, "", 0
 	}
-
-	return ""
 }
