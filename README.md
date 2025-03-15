@@ -2,7 +2,7 @@
 
 CC-Memcached is a custom implementation of a **Memcached-compatible server**, designed as part of the **[Memcached Challenge](https://codingchallenges.fyi/challenges/challenge-memcached)**. It supports **basic caching operations** like `SET`, `GET`, `ADD`, `REPLACE`, `APPEND`, and `PREPEND`, along with expiration times.
 
-## ** Features**
+## **Features**
 
 - **Memcached Text Protocol Support** (Compatible with `memtier_benchmark`)
 - **Multi-threaded Support** (Handles concurrent clients efficiently)
@@ -12,7 +12,7 @@ CC-Memcached is a custom implementation of a **Memcached-compatible server**, de
 
 ---
 
-## ** Installation**
+## **Installation**
 
 ### **Prerequisites**
 
@@ -27,7 +27,7 @@ CC-Memcached is a custom implementation of a **Memcached-compatible server**, de
 
 ---
 
-## ** Usage**
+## **Usage**
 
 ### **1. Clone the repository:**
 
@@ -50,7 +50,7 @@ go build -o cc-memcached
 
 ---
 
-## ** Benchmarking with `memtier_benchmark`**
+## **Benchmarking with `memtier_benchmark`**
 
 To test the performance of CC-Memcached, use the following command:
 
@@ -60,7 +60,7 @@ memtier_benchmark -p 11211 -P memcache_text \
   --key-pattern=S:S --data-size=128
 ```
 
-### ** Benchmark Results:**
+### **Benchmark Results:**
 
 ```
 ALL STATS
@@ -79,7 +79,7 @@ Totals     215749.22    107874.61         0.00         0.18547         0.17500  
 
 ---
 
-## ** License**
+## **License**
 
 This project is open-source and available under the **MIT License**.
 
