@@ -19,6 +19,7 @@ type Server struct {
 	store       map[string]entry
 	mu          sync.RWMutex
 	pendingData map[net.Conn]*pendingSet
+	pendingCmd  map[net.Conn]string
 }
 
 type entry struct {
@@ -38,6 +39,7 @@ func InitServer(port string, cmd *cobra.Command) *Server {
 		port:        port,
 		store:       make(map[string]entry),
 		pendingData: make(map[net.Conn]*pendingSet),
+		pendingCmd:  make(map[net.Conn]string),
 	}
 }
 
@@ -83,21 +85,52 @@ func (s *Server) handleConnection(c net.Conn) {
 				continue
 			}
 
+			cmd := s.pendingCmd[c]
 			expiration := pending.expTime
 
 			if expiration > 0 && expiration < 2592000 { // 30 days
 				expiration += time.Now().Unix()
 			}
 
-			s.mu.Lock()
-			s.store[pending.key] = entry{
-				value:      string(data),
-				expiration: expiration,
-			}
-			s.mu.Unlock()
+			switch cmd {
+			case "set":
+				s.mu.Lock()
+				s.store[pending.key] = entry{
+					value:      string(data),
+					expiration: expiration,
+				}
+				c.Write([]byte("STORED\r\n"))
+				s.mu.Unlock()
 
-			c.Write([]byte("STORED\r\n"))
+			case "add":
+				s.mu.Lock()
+				if _, e := s.store[pending.key]; e {
+					c.Write([]byte("NOT_STORED\r\n"))
+				} else {
+					s.store[pending.key] = entry{
+						value:      string(data),
+						expiration: expiration,
+					}
+					c.Write([]byte("STORED\r\n"))
+				}
+				s.mu.Unlock()
+
+			case "replace":
+				s.mu.Lock()
+				if _, e := s.store[pending.key]; e {
+					s.store[pending.key] = entry{
+						value:      string(data),
+						expiration: expiration,
+					}
+					c.Write([]byte("STORED\r\n"))
+				} else {
+					c.Write([]byte("NOT_STORED\r\n"))
+				}
+				s.mu.Unlock()
+			}
+
 			delete(s.pendingData, c)
+			delete(s.pendingCmd, c)
 			continue
 		}
 
@@ -109,7 +142,7 @@ func (s *Server) handleConnection(c net.Conn) {
 			break
 		}
 
-		response, expectingData, key, byteCount, expTime := s.processMessage(strings.TrimSpace(line))
+		response, expectingData, key, byteCount, expTime, pendingCmd := s.processMessage(strings.TrimSpace(line))
 
 		if expectingData {
 			s.pendingData[c] = &pendingSet{
@@ -117,7 +150,7 @@ func (s *Server) handleConnection(c net.Conn) {
 				byteCount: byteCount,
 				expTime:   expTime,
 			}
-
+			s.pendingCmd[c] = pendingCmd
 			continue
 		}
 
@@ -127,36 +160,35 @@ func (s *Server) handleConnection(c net.Conn) {
 				s.cmd.ErrOrStderr().Write([]byte("could not write response, err: " + err.Error()))
 				break
 			}
-			continue
 		}
 	}
 }
 
-func (s *Server) processMessage(line string) (response string, expectingData bool, key string, byteCount int, expTime int64) {
+func (s *Server) processMessage(line string) (response string, expectingData bool, key string, byteCount int, expTime int64, pendingCmd string) {
 	parts := strings.Fields(line)
 	if len(parts) < 2 {
-		return "ERROR\r\n", false, "", 0, 0
+		return "ERROR\r\n", false, "", 0, 0, ""
 	}
 
 	command, key := parts[0], parts[1]
 
 	switch command {
-	case "set":
+	case "set", "add", "replace":
 		if len(parts) < 5 {
-			return "CLIENT_ERROR invalid arguments\r\n", false, "", 0, 0
+			return "CLIENT_ERROR invalid arguments\r\n", false, "", 0, 0, ""
 		}
 
 		exptimeInt, err := strconv.Atoi(parts[3])
 		if err != nil || exptimeInt < 0 {
-			return "CLIENT_ERROR invalid exptime\r\n", false, "", 0, 0
+			return "CLIENT_ERROR invalid exptime\r\n", false, "", 0, 0, ""
 		}
 
 		byteCount, err := strconv.Atoi(parts[4])
 		if err != nil {
-			return "CLIENT_ERROR invalid byte count\r\n", false, "", 0, 0
+			return "CLIENT_ERROR invalid byte count\r\n", false, "", 0, 0, ""
 		}
 
-		return "", true, key, byteCount, int64(exptimeInt)
+		return "", true, key, byteCount, int64(exptimeInt), command
 
 	case "get":
 		s.mu.RLock()
@@ -164,7 +196,7 @@ func (s *Server) processMessage(line string) (response string, expectingData boo
 		s.mu.RUnlock()
 
 		if exists && (e.expiration == 0 || e.expiration > time.Now().Unix()) {
-			return fmt.Sprintf("VALUE %s 0 %d\r\n%s\r\nEND\r\n", key, len(e.value), e.value), false, "", 0, 0
+			return fmt.Sprintf("VALUE %s 0 %d\r\n%s\r\nEND\r\n", key, len(e.value), e.value), false, "", 0, 0, ""
 		}
 
 		if exists {
@@ -173,9 +205,9 @@ func (s *Server) processMessage(line string) (response string, expectingData boo
 			s.mu.Unlock()
 		}
 
-		return "END\r\n", false, "", 0, 0
+		return "END\r\n", false, "", 0, 0, ""
 
 	default:
-		return "ERROR\r\n", false, "", 0, 0
+		return "ERROR\r\n", false, "", 0, 0, ""
 	}
 }
