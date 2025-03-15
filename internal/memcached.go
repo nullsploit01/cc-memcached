@@ -2,6 +2,7 @@ package internal
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -134,6 +135,17 @@ func (s *Server) processMessage(line string) (response string, expectingData boo
 		}
 
 		return "", true, key, byteCount
+
+	case "get":
+		s.mu.RLock()
+		value, exists := s.store[key]
+		s.mu.RUnlock()
+
+		if !exists {
+			return "END\r\n", false, "", 0
+		}
+
+		return fmt.Sprintf("VALUE %s 0 %d\r\n%s\r\nEND\r\n", key, len(value), value), false, "", 0
 
 	default:
 		return "ERROR\r\n", false, "", 0
