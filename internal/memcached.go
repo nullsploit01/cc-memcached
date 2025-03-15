@@ -127,6 +127,28 @@ func (s *Server) handleConnection(c net.Conn) {
 					c.Write([]byte("NOT_STORED\r\n"))
 				}
 				s.mu.Unlock()
+
+			case "append":
+				if existingEntry, e := s.store[pending.key]; e {
+					s.store[pending.key] = entry{
+						value:      existingEntry.value + string(data),
+						expiration: existingEntry.expiration,
+					}
+					c.Write([]byte("STORED\r\n"))
+				} else {
+					c.Write([]byte("NOT_STORED\r\n"))
+				}
+
+			case "prepend":
+				if existingEntry, e := s.store[pending.key]; e {
+					s.store[pending.key] = entry{
+						value:      string(data) + existingEntry.value,
+						expiration: existingEntry.expiration,
+					}
+					c.Write([]byte("STORED\r\n"))
+				} else {
+					c.Write([]byte("NOT_STORED\r\n"))
+				}
 			}
 
 			delete(s.pendingData, c)
@@ -173,7 +195,7 @@ func (s *Server) processMessage(line string) (response string, expectingData boo
 	command, key := parts[0], parts[1]
 
 	switch command {
-	case "set", "add", "replace":
+	case "set", "add", "replace", "append", "prepend":
 		if len(parts) < 5 {
 			return "CLIENT_ERROR invalid arguments\r\n", false, "", 0, 0, ""
 		}
