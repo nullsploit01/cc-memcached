@@ -16,7 +16,7 @@ import (
 type Server struct {
 	cmd         *cobra.Command
 	port        string
-	store       map[string]entry
+	store       sync.Map
 	mu          sync.RWMutex
 	pendingData map[net.Conn]*pendingSet
 	pendingCmd  map[net.Conn]string
@@ -38,7 +38,7 @@ func InitServer(port string, cmd *cobra.Command) *Server {
 		cmd:         cmd,
 		port:        port,
 		mu:          sync.RWMutex{},
-		store:       make(map[string]entry),
+		store:       sync.Map{},
 		pendingData: make(map[net.Conn]*pendingSet),
 		pendingCmd:  make(map[net.Conn]string),
 	}
@@ -106,51 +106,57 @@ func (s *Server) handleConnection(c net.Conn) {
 			s.mu.Lock()
 			switch cmd {
 			case "set":
-				s.store[pending.key] = entry{
+				s.store.Store(pending.key, entry{
 					value:      string(data),
 					expiration: expiration,
-				}
+				})
 				c.Write([]byte("STORED\r\n"))
 
 			case "add":
-				if _, e := s.store[pending.key]; e {
+				_, e := s.store.Load(pending.key)
+				if e {
 					c.Write([]byte("NOT_STORED\r\n"))
 				} else {
-					s.store[pending.key] = entry{
+					s.store.Store(pending.key, entry{
 						value:      string(data),
 						expiration: expiration,
-					}
+					})
 					c.Write([]byte("STORED\r\n"))
 				}
 
 			case "replace":
-				if _, e := s.store[pending.key]; e {
-					s.store[pending.key] = entry{
+				_, e := s.store.Load(pending.key)
+				if e {
+					s.store.Store(pending.key, entry{
 						value:      string(data),
 						expiration: expiration,
-					}
+					})
 					c.Write([]byte("STORED\r\n"))
 				} else {
 					c.Write([]byte("NOT_STORED\r\n"))
 				}
 
 			case "append":
-				if existingEntry, e := s.store[pending.key]; e {
-					s.store[pending.key] = entry{
-						value:      existingEntry.value + string(data),
+				if val, exists := s.store.Load(pending.key); exists {
+					existingEntry := val.(entry)
+					updatedValue := existingEntry.value + string(data)
+					s.store.Store(pending.key, entry{
+						value:      updatedValue,
 						expiration: existingEntry.expiration,
-					}
+					})
 					c.Write([]byte("STORED\r\n"))
 				} else {
 					c.Write([]byte("NOT_STORED\r\n"))
 				}
 
 			case "prepend":
-				if existingEntry, e := s.store[pending.key]; e {
-					s.store[pending.key] = entry{
-						value:      string(data) + existingEntry.value,
+				if val, exists := s.store.Load(pending.key); exists {
+					existingEntry := val.(entry)
+					updatedValue := string(data) + existingEntry.value
+					s.store.Store(pending.key, entry{
+						value:      updatedValue,
 						expiration: existingEntry.expiration,
-					}
+					})
 					c.Write([]byte("STORED\r\n"))
 				} else {
 					c.Write([]byte("NOT_STORED\r\n"))
@@ -222,18 +228,14 @@ func (s *Server) processMessage(line string) (response string, expectingData boo
 		return "", true, key, byteCount, int64(exptimeInt), command
 
 	case "get":
-		s.mu.RLock()
-		e, exists := s.store[key]
-		s.mu.RUnlock()
+		if val, exists := s.store.Load(key); exists {
+			e := val.(entry)
 
-		if exists && (e.expiration == 0 || e.expiration > time.Now().Unix()) {
-			return fmt.Sprintf("VALUE %s 0 %d\r\n%s\r\nEND\r\n", key, len(e.value), e.value), false, "", 0, 0, ""
-		}
+			if e.expiration == 0 || e.expiration > time.Now().Unix() {
+				return fmt.Sprintf("VALUE %s 0 %d\r\n%s\r\nEND\r\n", key, len(e.value), e.value), false, "", 0, 0, ""
+			}
 
-		if exists {
-			s.mu.Lock()
-			delete(s.store, key)
-			s.mu.Unlock()
+			s.store.Delete(key)
 		}
 
 		return "END\r\n", false, "", 0, 0, ""
